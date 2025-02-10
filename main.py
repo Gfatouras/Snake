@@ -8,8 +8,10 @@ ACTIONS = ["straight", "left", "right"]
 ALPHA = 0.1  # Learning rate
 GAMMA = 0.9  # Discount factor
 EPSILON = 1.0  # Initial exploration rate
-EPSILON_DECAY = 0.9997  # Slower decay
-EPSILON_MIN = 0.01  # Minimum exploration rate
+EPSILON_DECAY = 0.9995  # Slower decay
+EPSILON_MIN = 0.0  # Minimum exploration rate
+MEMORY_SIZE = 1000  # Memory buffer size
+BATCH_SIZE = 128  # Batch size for training
 
 # Snake parameters
 initial_snake = [(0, 0)]  # Snake starts at (0, 0)
@@ -17,6 +19,9 @@ directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # Up, Right, Down, Left
 
 # Initialize Q-table
 Q_table = {}
+
+# Memory buffer
+memory = []
 
 # Function to get the dx/dy to food and the tail (used for decision-making)
 def get_deltas(snake, food):
@@ -95,6 +100,21 @@ def update_q_value(state, action, reward, next_state):
     action_index = ACTIONS.index(action)
     Q_table[state][action_index] += ALPHA * (reward + GAMMA * max_future_q - Q_table[state][action_index])
 
+# Function to store experiences in memory buffer
+def store_in_memory(state, action, reward, next_state):
+    if len(memory) >= MEMORY_SIZE:
+        memory.pop(0)  # Remove the oldest memory if the buffer is full
+    memory.append((state, action, reward, next_state))
+
+# Function to sample a batch from memory and update Q-values
+def replay():
+    if len(memory) < BATCH_SIZE:
+        return
+
+    batch = random.sample(memory, BATCH_SIZE)
+    for state, action, reward, next_state in batch:
+        update_q_value(state, action, reward, next_state)
+
 # Function to run a game simulation
 def run_game():
     snake = initial_snake.copy()
@@ -113,12 +133,13 @@ def run_game():
         # Choose action based on epsilon-greedy strategy
         action = choose_action(state, direction)
 
-        # Move the snake based on chosen action
+        # Move snake based on chosen action
         game_continue, snake, direction = move_snake(snake, direction, action)
 
         if not game_continue:
             reward = -10  # If the snake crashes, return a penalty
-            update_q_value(state, action, reward, state)  # Update Q-table with the penalty
+            store_in_memory(state, action, reward, state)  # Store the experience
+            replay()  # Sample from memory and update Q-table
             return score + reward
 
         # Check if snake eats food
@@ -133,8 +154,11 @@ def run_game():
         # Get the next state after the move
         next_state = (food_dx, food_dy, direction)
 
-        # Update the Q-table with the reward and new state
-        update_q_value(state, action, reward, next_state)
+        # Store experience in memory
+        store_in_memory(state, action, reward, next_state)
+
+        # Sample from memory and update Q-table
+        replay()
 
         # Limit the number of steps per game for this simulation
         if len(snake) > 50:  # Game limit (snake growing too long)
@@ -142,13 +166,12 @@ def run_game():
 
     return score
 
-
 # Track epsilon, score, and episode number
 epsilons = []
 scores = []
 iterations = []
 
-# Run multiple games and track epsilon, score, and iteration
+# Function to run multiple games and track epsilon, score, and iteration
 def run_multiple_games(num_games=10000):
     global EPSILON  # Declare EPSILON as global before modifying it
     total_score = 0
