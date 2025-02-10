@@ -1,270 +1,191 @@
-import pygame
 import random
-import numpy as np
+import pickle  # To save the model
 import matplotlib.pyplot as plt
-import threading  # For multithreading
-import random
-import csv
-
-# Initialize Pygame
-pygame.init()
 
 # Constants for the game
-WIDTH, HEIGHT = 200, 200
 GRID_SIZE = 10
-CELL_SIZE = WIDTH // GRID_SIZE
+ACTIONS = ["straight", "left", "right"]
+ALPHA = 0.1  # Learning rate
+GAMMA = 0.9  # Discount factor
+EPSILON = 1.0  # Initial exploration rate
+EPSILON_DECAY = 0.9997  # Slower decay
+EPSILON_MIN = 0.01  # Minimum exploration rate
 
-# Colors
-WHITE = (255, 255, 255)
-GREEN = (0, 255, 0)
-RED = (255, 0, 0)
-BLACK = (0, 0, 0)
+# Snake parameters
+initial_snake = [(0, 0)]  # Snake starts at (0, 0)
+directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # Up, Right, Down, Left
 
-# Initialize screen
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Snake Game")
+# Initialize Q-table
+Q_table = {}
 
-# Q-learning parameters
-alpha = 0.75  # Learning rate
-gamma = 0.5  # Discount factor
-epsilon = 1.0  # Initial exploration rate
-epsilon_decay = 0.9999  # Decay rate for epsilon
-epsilon_min = 0.01  # Minimum exploration rate
-Q_table = {}  # Q-table for state-action pairs
-
-# Counters for crashes into wall vs. tail
-wall_crashes = 0
-tail_crashes = 0
-
-# Function to generate the state
-def get_state(snake, food):
+# Function to get the dx/dy to food and the tail (used for decision-making)
+def get_deltas(snake, food):
     head = snake[0]
-    food_dx = food[0] - head[0]  # Relative x position of food
-    food_dy = food[1] - head[1]  # Relative y position of food
-    distance_to_food = abs(food_dx) + abs(food_dy)  # Manhattan distance to food
+    food_dx = food[0] - head[0]
+    food_dy = food[1] - head[1]
 
-    # Check for obstacles in each direction
-    obstacle_up = (head[0], head[1] - 1) in snake or head[1] - 1 < 0
-    obstacle_down = (head[0], head[1] + 1) in snake or head[1] + 1 >= GRID_SIZE
-    obstacle_left = (head[0] - 1, head[1]) in snake or head[0] - 1 < 0
-    obstacle_right = (head[0] + 1, head[1]) in snake or head[0] + 1 >= GRID_SIZE
-
-    # Calculate distance to the nearest wall (up, down, left, right)
-    distance_up = head[1]  # Distance from head to the top wall
-    distance_down = GRID_SIZE - 1 - head[1]  # Distance from head to the bottom wall
-    distance_left = head[0]  # Distance from head to the left wall
-    distance_right = GRID_SIZE - 1 - head[0]  # Distance from head to the right wall
+    # dx/dy to tail
+    tail_deltas = []
+    for segment in snake[1:]:
+        tail_dx = head[0] - segment[0]
+        tail_dy = head[1] - segment[1]
+        tail_deltas.append((tail_dx, tail_dy))
     
-    # Find the minimum distance to any wall
-    min_distance_to_wall = min(distance_up, distance_down, distance_left, distance_right)
+    return (food_dx, food_dy), tail_deltas
 
-    state = (
-        food_dx, food_dy, distance_to_food,  # Relative food position and distance
-        obstacle_up, obstacle_down, obstacle_left, obstacle_right,  # Obstacles in each direction
-        len(snake),  # Snake length
-        min_distance_to_wall  # Distance to the nearest wall
-    )
-    return state
+# Function to choose action with epsilon-greedy strategy
+def choose_action(state, direction):
+    if random.uniform(0, 1) < EPSILON:  # Exploration
+        action = random.choice(ACTIONS)
+    else:  # Exploitation
+        if state not in Q_table:
+            Q_table[state] = [0] * len(ACTIONS)  # Initialize Q-values for new state
+        action = ACTIONS[max(range(len(Q_table[state])), key=lambda x: Q_table[state][x])]
+    return action
+
+# Function to move the snake based on action
+def move_snake(snake, direction, action):
+    head = snake[0]
+    
+    # If action is "straight", keep the current direction
+    if action == "straight":
+        new_direction = direction
+    elif action == "left":
+        # Turn left (counterclockwise 90 degrees)
+        new_direction = directions[(directions.index(direction) - 1) % 4]
+    elif action == "right":
+        # Turn right (clockwise 90 degrees)
+        new_direction = directions[(directions.index(direction) + 1) % 4]
+
+    # Calculate new head position based on new direction
+    new_head = (head[0] + new_direction[0], head[1] + new_direction[1])
+
+    # Check if the snake goes out of bounds
+    if new_head[0] < 0 or new_head[0] >= GRID_SIZE or new_head[1] < 0 or new_head[1] >= GRID_SIZE:
+        return False, snake, new_direction  # Game over (hit the wall)
+
+    # Check if the snake runs into itself
+    if new_head in snake[1:]:
+        return False, snake, new_direction  # Game over (hit its own tail)
+
+    # Snake grows by adding new head
+    snake = [new_head] + snake
+
+    return True, snake, new_direction
 
 
-# Function to initialize game
-def reset_game():
-    # Snake starts at the center of the grid
-    snake = [(GRID_SIZE // 2, GRID_SIZE // 2)]  # Snake starts at the center
-    food = spawn_food(snake)
-    return snake, food
-
-
-# Function to spawn food
+# Function to spawn new food
 def spawn_food(snake):
     while True:
-        food = (random.randint(0, GRID_SIZE - 1), random.randint(0, GRID_SIZE - 1))
+        food = (random.randint(0, GRID_SIZE-1), random.randint(0, GRID_SIZE-1))
         if food not in snake:
             return food
 
-# Function to update Q-value using Q-learning
+# Function to update Q-values using the Q-learning formula
 def update_q_value(state, action, reward, next_state):
     if state not in Q_table:
-        Q_table[state] = np.zeros(4)  # Initialize with 4 actions
+        Q_table[state] = [0] * len(ACTIONS)
     if next_state not in Q_table:
-        Q_table[next_state] = np.zeros(4)
-    
-    max_future_q = np.max(Q_table[next_state])  # Max future Q-value
-    current_q = Q_table[state][action]  # Current Q-value
-    
+        Q_table[next_state] = [0] * len(ACTIONS)
+
+    # Get the maximum Q-value for the next state
+    max_future_q = max(Q_table[next_state])
+
     # Update Q-value using Q-learning formula
-    Q_table[state][action] = current_q + alpha * (reward + gamma * max_future_q - current_q)
+    action_index = ACTIONS.index(action)
+    Q_table[state][action_index] += ALPHA * (reward + GAMMA * max_future_q - Q_table[state][action_index])
 
-# Function to choose action (epsilon-greedy)
-def choose_action(state, current_direction):
-    if random.uniform(0, 1) < epsilon:  # Exploration
-        # If moving horizontally (left or right), allow up/down moves
-        if current_direction in [(1, 0), (-1, 0)]:  
-            return random.choice([0, 2])  # Up or Down
-        # If moving vertically (up or down), allow left/right moves
-        else:
-            return random.choice([1, 3])  # Left or Right
-    else:  # Exploitation
-        if state in Q_table:
-            # Choose the action with the highest Q-value respecting movement constraints
-            if current_direction in [(1, 0), (-1, 0)]:  # If moving horizontally
-                return np.argmax([Q_table[state][0], Q_table[state][2]])  # Only up/down actions
-            else:  # If moving vertically
-                return np.argmax([Q_table[state][1], Q_table[state][3]])  # Only left/right actions
-        return random.randint(0, 3)  # Default to random action if state is unknown
+# Function to run a game simulation
+def run_game():
+    snake = initial_snake.copy()
+    direction = random.choice(directions)  # Random initial direction
+    food = spawn_food(snake)  # Initialize food position
+    score = 0
 
-# Function to move snake
-def move_snake(snake, direction):
-    head = snake[0]
-    new_head = (head[0] + direction[0], head[1] + direction[1])
-    
-    # Check if the snake collides with the walls
-    if new_head[0] < 0 or new_head[0] >= GRID_SIZE or new_head[1] < 0 or new_head[1] >= GRID_SIZE:
-        return False, snake  # Game over
-    
-    # Skip self-collision check if the snake is size 1
-    if len(snake) > 1 and new_head in snake[1:]:
-        return False, snake  # Death by tail
-    
-    snake = [new_head] + snake  # Add the new head to the front of the snake
-    return True, snake
-
-
-# Function to draw the game
-def draw_game(snake, food, score):
-    screen.fill(BLACK)
-    
-    # Draw the snake
-    for segment in snake:
-        pygame.draw.rect(screen, GREEN, (segment[0] * CELL_SIZE, segment[1] * CELL_SIZE, CELL_SIZE, CELL_SIZE))
-    
-    # Draw the food
-    pygame.draw.rect(screen, RED, (food[0] * CELL_SIZE, food[1] * CELL_SIZE, CELL_SIZE, CELL_SIZE))
-
-    # Draw score
-    font = pygame.font.SysFont(None, 24)
-    score_text = font.render(f"Score: {score}", True, WHITE)
-    screen.blit(score_text, (5, 5))
-
-    pygame.display.update()
-
-def run_episode():
-    global epsilon, wall_crashes, tail_crashes
-    snake, food = reset_game()
-    total_reward = 0
-    steps = 0
-    ate_food = False
-    current_direction = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])  # Start with random direction
-
+    # Run until game over
     while True:
-        state = get_state(snake, food)
-        action = choose_action(state, current_direction)
-        
-        # Determine new direction based on the action and current direction
-        if action == 0:  # Up
-            new_direction = (0, -1)
-        elif action == 1:  # Right
-            new_direction = (1, 0)
-        elif action == 2:  # Down
-            new_direction = (0, 1)
-        else:  # Left
-            new_direction = (-1, 0)
-        
-        # Move the snake
-        game_continue, snake = move_snake(snake, new_direction)
-        
-        # Check if the game is over
-        if not game_continue:
-            reward = -10  # Penalty for crashing into the wall
-            if snake[0][0] < 0 or snake[0][0] >= GRID_SIZE or snake[0][1] < 0 or snake[0][1] >= GRID_SIZE:
-                wall_crashes += 1
-                cause_of_death = "Wall"  # Wall collision
-            elif len(snake) >= 5 and snake[0] in snake[1:]:  # Tail collision only if snake size >= 5
-                tail_crashes += 1
-                cause_of_death = "Tail"
-            else:
-                cause_of_death = "Wall"  # For size 1, it should be wall collision, not "None"
-            update_q_value(state, action, reward, state)
-            print(f"Episode ended. Cause of death: {cause_of_death}. Snake size: {len(snake)} blocks. Ate food: {ate_food}")
-            return total_reward, len(snake), epsilon  # End game
-        
-        # Check if snake eats food
-        head = snake[0]
-        if head == food:
-            food = spawn_food(snake)
-            reward = 10  # Reward for eating food
-            ate_food = True
-            # Snake grows after eating food, but only the new head is added, tail remains behind
-        else:
-            reward = -0.01 # Small penalty for each step
-            snake.pop()  # Remove the tail
+        # Get deltas (dx/dy) to food and tail (tail is used for avoiding collisions)
+        (food_dx, food_dy), tail_deltas = get_deltas(snake, food)
 
-        # Get the next state
-        next_state = get_state(snake, food)
-        
-        # Update Q-values
+        # Represent the state
+        state = (food_dx, food_dy, direction)
+
+        # Choose action based on epsilon-greedy strategy
+        action = choose_action(state, direction)
+
+        # Move the snake based on chosen action
+        game_continue, snake, direction = move_snake(snake, direction, action)
+
+        if not game_continue:
+            reward = -10  # If the snake crashes, return a penalty
+            update_q_value(state, action, reward, state)  # Update Q-table with the penalty
+            return score + reward
+
+        # Check if snake eats food
+        if snake[0] == food:
+            reward = 10  # Reward for eating food
+            score += reward
+            food = spawn_food(snake)  # Spawn new food
+        else:
+            reward = 0  # No reward, snake just moves forward
+            snake.pop()  # Remove the tail segment (snake moves forward)
+
+        # Get the next state after the move
+        next_state = (food_dx, food_dy, direction)
+
+        # Update the Q-table with the reward and new state
         update_q_value(state, action, reward, next_state)
-        
-        total_reward += reward
-        steps += 1
-        current_direction = new_direction  # Update the direction
-        
-        # Draw the game
-        draw_game(snake, food, total_reward)
-        pygame.time.Clock().tick(2000)  # Control FPS
-        
-        if steps > 1000:  # Limit the number of steps per episode
+
+        # Limit the number of steps per game for this simulation
+        if len(snake) > 50:  # Game limit (snake growing too long)
             break
 
-    return total_reward, len(snake), epsilon
+    return score
 
-# Function for running game logic
-def game_thread():
-    global epsilon
-    rewards_history = []
-    snake_sizes = []
-    epsilons = []
 
-    for episode in range(10000):  # Train for 2000 episodes
-        total_reward, snake_size, current_epsilon = run_episode()
-        rewards_history.append(total_reward)
-        snake_sizes.append(snake_size)
-        epsilons.append(current_epsilon)
-        epsilon = max(epsilon_min, epsilon * epsilon_decay)  # Decay epsilon
-        print(f"Episode {episode + 1}, Total Reward: {total_reward}, Epsilon: {epsilon}")
+# Track epsilon, score, and episode number
+epsilons = []
+scores = []
+iterations = []
 
-    # Export the data to CSV after all episodes finish
-    export_to_csv(rewards_history, snake_sizes, epsilons)
+# Run multiple games and track epsilon, score, and iteration
+def run_multiple_games(num_games=10000):
+    global EPSILON  # Declare EPSILON as global before modifying it
+    total_score = 0
+    for i in range(num_games):
+        game_score = run_game()
+        total_score += game_score
+        scores.append(total_score)
+        iterations.append(i + 1)
+        epsilons.append(EPSILON)
 
-# Function to export data to CSV
-def export_to_csv(rewards_history, snake_sizes, epsilons):
-    # Define the header
-    header = ["Episode", "Snake Size", "Epsilon", "Total Reward"]
-    
-    # Open the CSV file and write the data
-    with open('episode_data.csv', 'w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(header)
-        for i in range(len(rewards_history)):
-            writer.writerow([i + 1, snake_sizes[i], epsilons[i], rewards_history[i]])
-    
-    print("Episode data exported to episode_data.csv")
+        # Epsilon decay
+        EPSILON = max(EPSILON_MIN, EPSILON * EPSILON_DECAY)
 
-# Main function to run the game loop
-def main():
-    # Start the game logic in a separate thread
-    threading.Thread(target=game_thread, daemon=True).start()
+    print(f"Total Score after {num_games} games: {total_score}")
 
-    # Main Pygame event loop (renders the screen)
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-        pygame.display.update()
-    
-    pygame.quit()
 
-# Run the main function
-if __name__ == "__main__":
-    main()
+# Run the simulation for 10000 games
+run_multiple_games(10000)
+
+# Save the trained Q-table using pickle
+with open('trained_q_table.pkl', 'wb') as f:
+    pickle.dump(Q_table, f)
+
+# Plot the graphs for epsilon, score, and iterations
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+
+# Plot epsilon vs iterations
+ax1.plot(iterations, epsilons, color='blue')
+ax1.set_xlabel('Iterations')
+ax1.set_ylabel('Epsilon')
+ax1.set_title('Epsilon vs Iterations')
+
+# Plot score vs iterations
+ax2.plot(iterations, scores, color='green')
+ax2.set_xlabel('Iterations')
+ax2.set_ylabel('Score')
+ax2.set_title('Score vs Iterations')
+
+plt.tight_layout()
+plt.show()
