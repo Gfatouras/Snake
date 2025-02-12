@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 GRID_SIZE = 10
 ACTIONS = ["straight", "left", "right"]
 ALPHA = 0.1  # Learning rate
-GAMMA = 0.9  # Discount factor
+GAMMA = 0.90  # Discount factor
 EPSILON = 1.0  # Initial exploration rate
-EPSILON_DECAY = 0.9995  # Slower decay
+EPSILON_DECAY = 0.9997  # Slower decay
 EPSILON_MIN = 0.0  # Minimum exploration rate
-MEMORY_SIZE = 1000  # Memory buffer size
-BATCH_SIZE = 128  # Batch size for training
+MEMORY_SIZE = 100  # Memory buffer size
+BATCH_SIZE = 64  # Batch size for training
 
 # Snake parameters
 initial_snake = [(0, 0)]  # Snake starts at (0, 0)
@@ -137,18 +137,18 @@ def run_game():
         game_continue, snake, direction = move_snake(snake, direction, action)
 
         if not game_continue:
-            reward = -10  # If the snake crashes, return a penalty
+            reward = -1  # If the snake crashes, return a penalty
             store_in_memory(state, action, reward, state)  # Store the experience
             replay()  # Sample from memory and update Q-table
             return score + reward
 
         # Check if snake eats food
         if snake[0] == food:
-            reward = 10  # Reward for eating food
+            reward = 1  # Reward for eating food
             score += reward
             food = spawn_food(snake)  # Spawn new food
         else:
-            reward = 0  # No reward, snake just moves forward
+            reward = -0.1  # No reward, snake just moves forward
             snake.pop()  # Remove the tail segment (snake moves forward)
 
         # Get the next state after the move
@@ -166,37 +166,37 @@ def run_game():
 
     return score
 
-# Track epsilon, score, and episode number
+# Track epsilon, score per game, cumulative score, and episode number
 epsilons = []
-scores = []
+scores = []  # Individual game scores
+cumulative_scores = []  # Cumulative sum of scores over time
 iterations = []
 
 # Function to run multiple games and track epsilon, score, and iteration
-def run_multiple_games(num_games=10000):
+def run_multiple_games(num_games=20000):
     global EPSILON  # Declare EPSILON as global before modifying it
     total_score = 0
     for i in range(num_games):
         game_score = run_game()
-        total_score += game_score
-        scores.append(total_score)
+        scores.append(game_score)  # Store individual game score
+        total_score += game_score  # Update cumulative score
+        cumulative_scores.append(total_score)  # Store cumulative score
         iterations.append(i + 1)
         epsilons.append(EPSILON)
 
-        # Epsilon decay
         EPSILON = max(EPSILON_MIN, EPSILON * EPSILON_DECAY)
 
     print(f"Total Score after {num_games} games: {total_score}")
 
-
 # Run the simulation for 10000 games
-run_multiple_games(10000)
+run_multiple_games(20000)
 
 # Save the trained Q-table using pickle
 with open('trained_q_table.pkl', 'wb') as f:
     pickle.dump(Q_table, f)
 
-# Plot the graphs for epsilon, score, and iterations
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+# Plot the graphs for epsilon, score per game, cumulative score, and iterations
+fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 10))
 
 # Plot epsilon vs iterations
 ax1.plot(iterations, epsilons, color='blue')
@@ -204,11 +204,19 @@ ax1.set_xlabel('Iterations')
 ax1.set_ylabel('Epsilon')
 ax1.set_title('Epsilon vs Iterations')
 
-# Plot score vs iterations
+# Plot individual game scores vs iterations
 ax2.plot(iterations, scores, color='green')
 ax2.set_xlabel('Iterations')
 ax2.set_ylabel('Score')
-ax2.set_title('Score vs Iterations')
+ax2.set_title('Score per Game')
+
+# Plot cumulative score vs iterations
+ax3.plot(iterations, cumulative_scores, color='red')
+ax3.set_xlabel('Iterations')
+ax3.set_ylabel('Cumulative Score')
+ax3.set_title('Cumulative Score vs Iterations')
 
 plt.tight_layout()
 plt.show()
+
+
