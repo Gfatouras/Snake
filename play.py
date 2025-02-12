@@ -1,11 +1,11 @@
 import pygame
 import pickle
 import random
+import time
 
-# Constants for the game
 GRID_SIZE = 10
 ACTIONS = ["straight", "left", "right"]
-WIDTH, HEIGHT = 100, 100  # Set the screen size to 100x100 pixels
+WIDTH, HEIGHT = GRID_SIZE * 10, GRID_SIZE * 10  # Set the screen size to 100x100 pixels
 
 # Initialize Pygame
 pygame.init()
@@ -17,7 +17,6 @@ pygame.display.set_caption("Snake Game")
 # Initialize the snake and its direction
 initial_snake = [(0, 0)]  # Snake starts at (0, 0)
 directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # Up, Right, Down, Left
-direction = random.choice(directions)
 
 # Load the trained Q-table
 with open('trained_q_table.pkl', 'rb') as f:
@@ -76,56 +75,57 @@ def move_snake(snake, direction, action, food):
 
     return True, snake, new_direction
 
-
 # Function to spawn food at random locations
 def spawn_food(snake):
     while True:
-        food = (random.randint(0, GRID_SIZE-1), random.randint(0, GRID_SIZE-1))
+        food = (random.randint(0, GRID_SIZE - 1), random.randint(0, GRID_SIZE - 1))
         if food not in snake:
             return food
 
 # Main loop to run the game with the trained model
 def play_game():
-    snake = initial_snake.copy()
-    direction = random.choice(directions)  # Initialize direction randomly
-    food = spawn_food(snake)
-    score = 0
-    clock = pygame.time.Clock()
+    while True:  # Outer loop to restart the game
+        snake = initial_snake.copy()
+        direction = random.choice(directions)  # Initialize direction randomly
+        food = spawn_food(snake)
+        score = 0
+        clock = pygame.time.Clock()
 
-    # Run the game loop
-    game_continue = True
-    while game_continue:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                game_continue = False
+        # Run the game loop
+        game_continue = True
+        while game_continue:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    return  # Exit the program if the user closes the window
 
-        # Get state (food and snake direction)
-        (food_dx, food_dy), tail_deltas = get_deltas(snake, food)
-        state = (food_dx, food_dy, direction)
+            # Get state (food and snake direction)
+            (food_dx, food_dy), tail_deltas = get_deltas(snake, food)
+            state = (food_dx, food_dy, direction)
 
-        # Choose action based on Q-table
-        action = choose_action(state)
+            # Choose action based on Q-table
+            action = choose_action(state)
 
-        # Move snake and check if the game is over
-        game_continue, snake, direction = move_snake(snake, direction, action, food)
+            # Move snake and check if the game is over
+            game_continue, snake, direction = move_snake(snake, direction, action, food)
 
-        # Check if snake eats food
-        if snake[0] == food:
-            score += 10
-            food = spawn_food(snake)
+            # Check if snake eats food
+            if snake[0] == food:
+                score += 10
+                food = spawn_food(snake)
 
-        # Draw the game state
-        screen.fill((0, 0, 0))  # Clear screen
-        for segment in snake:
-            pygame.draw.rect(screen, (0, 255, 0), (segment[0] * 10, segment[1] * 10, 10, 10))
-        pygame.draw.rect(screen, (255, 0, 0), (food[0] * 10, food[1] * 10, 10, 10))
+            # Draw the game state
+            screen.fill((0, 0, 0))  # Clear screen
+            for segment in snake:
+                pygame.draw.rect(screen, (0, 255, 0), (segment[0] * 10, segment[1] * 10, 10, 10))
+            pygame.draw.rect(screen, (255, 0, 0), (food[0] * 10, food[1] * 10, 10, 10))
 
-        # Update the screen and set the FPS
-        pygame.display.flip()
-        clock.tick(10)
+            # Update the screen and set the FPS
+            pygame.display.flip()
+            clock.tick(10)
 
-    print(f"Game Over! Final Score: {score}")
-    pygame.quit()
+        print(f"Game Over! Final Score: {score}")
+        time.sleep(2)  # Pause for 2 seconds before restarting
 
 # Run the game with the trained model
 play_game()

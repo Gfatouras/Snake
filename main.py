@@ -1,7 +1,7 @@
 import random
 import pickle  # To save the model
 import matplotlib.pyplot as plt
-
+import sys
 # Constants for the game
 GRID_SIZE = 10
 ACTIONS = ["straight", "left", "right"]
@@ -12,6 +12,7 @@ EPSILON_DECAY = 0.9997  # Slower decay
 EPSILON_MIN = 0.0  # Minimum exploration rate
 MEMORY_SIZE = 100  # Memory buffer size
 BATCH_SIZE = 64  # Batch size for training
+NUM_GAMES= 20_000
 
 # Snake parameters
 initial_snake = [(0, 0)]  # Snake starts at (0, 0)
@@ -173,9 +174,10 @@ cumulative_scores = []  # Cumulative sum of scores over time
 iterations = []
 
 # Function to run multiple games and track epsilon, score, and iteration
-def run_multiple_games(num_games=20000):
+def run_multiple_games(num_games=NUM_GAMES):
     global EPSILON  # Declare EPSILON as global before modifying it
     total_score = 0
+
     for i in range(num_games):
         game_score = run_game()
         scores.append(game_score)  # Store individual game score
@@ -186,10 +188,14 @@ def run_multiple_games(num_games=20000):
 
         EPSILON = max(EPSILON_MIN, EPSILON * EPSILON_DECAY)
 
-    print(f"Total Score after {num_games} games: {total_score}")
+        # ✅ Print progress on the same line (overwrites previous output)
+        sys.stdout.write(f"\rGame {i + 1}/{num_games}:, Total Score = {total_score}, Epsilon = {EPSILON:.4f}, Q-table size = {len(Q_table)}")
+        sys.stdout.flush()  # Ensure output is updated immediately
 
-# Run the simulation for 10000 games
-run_multiple_games(20000)
+    print(f"\nTotal Score after {num_games} games: {total_score}")  # Final output on new line
+
+# Run the simulation for 20000 games
+run_multiple_games(NUM_GAMES)
 
 # Save the trained Q-table using pickle
 with open('trained_q_table.pkl', 'wb') as f:
@@ -218,5 +224,4 @@ ax3.set_title('Cumulative Score vs Iterations')
 
 plt.tight_layout()
 plt.show()
-
 
