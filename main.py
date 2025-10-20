@@ -3,247 +3,281 @@ import pickle  # To save the model
 import matplotlib.pyplot as plt
 import sys
 import numpy as np  # For calculating moving average
+from collections import deque  # For efficient memory buffer
+from utils import (
+    GRID_SIZE, ACTIONS, directions, get_state,
+    spawn_food, move_snake, manhattan_distance
+)
 
-# Constants for the game
-GRID_SIZE = 10
-ACTIONS = ["straight", "left", "right"]
-
-ALPHA = 0.1      # Learning rate
-GAMMA = 0.90     # Discount factor
+# Hyperparameters - OPTIMIZED
+ALPHA = 0.05     # Learning rate (reduced for more stable convergence)
+GAMMA = 0.95     # Discount factor (increased to value long-term rewards)
 EPSILON = 1.0    # Initial exploration rate
-EPSILON_DECAY = 0.9993  # Decay rate
-EPSILON_MIN = 0.0       # Minimum exploration rate
+EPSILON_DECAY = 0.999   # Decay rate (faster decay - reaches min around game 1000)
+EPSILON_MIN = 0.001      # Minimum exploration rate (keep small exploration)
 
-MEMORY_SIZE = 1024  # Memory buffer size
-BATCH_SIZE = 128    # Batch size for training
-NUM_GAMES = 5_000   # Number of iterations
+MEMORY_SIZE = 2048      # Memory buffer size (increased for better sampling)
+BATCH_SIZE = 64         # Batch size for training (reduced for faster early training)
+REPLAY_FREQUENCY = 4    # Only replay every N steps (optimization)
+NUM_GAMES = 10_000       # Number of iterations
 
 MOVING_AVERAGE_CHART_VAL = 100  # Last 100 games average
 
-# Rewards & Penalties
-REWARD_FOOD = 1.0       # Reward for eating food
-PENALTY_WALL = -1.0     # Penalty for hitting a wall
-PENALTY_TAIL = -1.0     # Penalty for hitting own tail
-PENALTY_MOVE = -0.05    # Small penalty for each movement to encourage efficiency
+# Rewards & Penalties - OPTIMIZED
+REWARD_FOOD = 10.0          # Reward for eating food (increased)
+PENALTY_DEATH = -10.0       # Penalty for dying (wall or tail)
+PENALTY_MOVE = -0.01        # Small penalty for each movement (reduced)
+REWARD_CLOSER = 0.1         # Small reward for getting closer to food
+PENALTY_FARTHER = -0.1      # Small penalty for getting farther from food
 
-# Snake parameters
+# Game parameters
+MAX_STEPS_WITHOUT_FOOD = 100  # Prevent infinite loops
 initial_snake = [(5, 5)]  # Snake starts at the center of the grid
-directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # Up, Right, Down, Left
 
-# Initialize Q-table and Memory buffer
+# Initialize Q-table and Memory buffer - OPTIMIZED
 Q_table = {}
-memory = []
+memory = deque(maxlen=MEMORY_SIZE)  # Use deque for O(1) operations
+step_counter = 0  # Global step counter for replay timing
 
 # Lists for plotting
 epsilons = []
 scores = []            # Individual game scores
 cumulative_scores = [] # Cumulative sum of scores over time
 iterations = []
-
-# Function to get the normalized difference between snake's head and food
-def get_deltas(snake, food):
-    head = snake[0]
-    food_dx = np.sign(food[0] - head[0])  # Normalize to -1, 0, or 1
-    food_dy = np.sign(food[1] - head[1])
-    return food_dx, food_dy
-
-# Function to detect proximity of walls and tail around the snake's head
-def get_wall_and_tail_proximity(snake):
-    head_x, head_y = snake[0]
-    # Walls: 1 if the head is at the boundary, else 0
-    wall_left = 1 if head_x == 0 else 0
-    wall_right = 1 if head_x == GRID_SIZE - 1 else 0
-    wall_up = 1 if head_y == 0 else 0
-    wall_down = 1 if head_y == GRID_SIZE - 1 else 0
-    # Tail proximity: check immediate adjacent positions
-    left_pos = (head_x - 1, head_y)
-    right_pos = (head_x + 1, head_y)
-    up_pos = (head_x, head_y - 1)
-    down_pos = (head_x, head_y + 1)
-    tail_left = 1 if left_pos in snake else 0
-    tail_right = 1 if right_pos in snake else 0
-    tail_up = 1 if up_pos in snake else 0
-    tail_down = 1 if down_pos in snake else 0
-    return wall_left, wall_right, wall_up, wall_down, tail_left, tail_right, tail_up, tail_down
+steps_per_game = []    # Track steps taken per game
 
 # Epsilon-greedy action selection based on the state
 def choose_action(state):
-    global EPSILON
+    """Choose action using epsilon-greedy policy."""
     if random.uniform(0, 1) < EPSILON:  # Exploration
         return random.choice(ACTIONS)
     if state not in Q_table:
-        Q_table[state] = [random.uniform(-1, 1) for _ in ACTIONS]
+        # Initialize with small random values for consistent exploration
+        Q_table[state] = [random.uniform(-0.01, 0.01) for _ in ACTIONS]
     return ACTIONS[np.argmax(Q_table[state])]
 
-# Move the snake based on the chosen action.
-# Now it takes the food position as a parameter so we can grow the snake.
-def move_snake(snake, direction, action, food):
-    head = snake[0]
-    new_direction = direction
-    if action == "left":
-        new_direction = directions[(directions.index(direction) - 1) % 4]
-    elif action == "right":
-        new_direction = directions[(directions.index(direction) + 1) % 4]
-    new_head = (head[0] + new_direction[0], head[1] + new_direction[1])
-    
-    # Check for wall collision
-    if new_head[0] < 0 or new_head[0] >= GRID_SIZE or new_head[1] < 0 or new_head[1] >= GRID_SIZE:
-        return False, snake, new_direction  # Hit wall
-    
-    # Check for collision with itself
-    if new_head in snake:
-        return False, snake, new_direction  # Hit tail
-    
-    # If the new head is on the food, grow the snake (do not remove the tail)
-    if new_head == food:
-        new_snake = [new_head] + snake  # Grow snake by adding new head without removing tail
-    else:
-        new_snake = [new_head] + snake[:-1]  # Normal movement: add new head, remove tail
-    
-    return True, new_snake, new_direction
 
-# Q-learning update
-def update_q_value(state, action, reward, next_state):
+# Q-learning update - OPTIMIZED
+def update_q_value(state, action, reward, next_state, is_terminal=False):
+    """
+    Update Q-value using Q-learning algorithm.
+    Handles terminal states correctly (no future reward).
+    """
     if state not in Q_table:
-        Q_table[state] = [random.uniform(-0.1, 0.1) for _ in ACTIONS]
-    if next_state not in Q_table:
-        Q_table[next_state] = [random.uniform(-0.1, 0.1) for _ in ACTIONS]
+        Q_table[state] = [random.uniform(-0.01, 0.01) for _ in ACTIONS]
+
     action_index = ACTIONS.index(action)
-    max_future_q = max(Q_table[next_state])
-    Q_table[state][action_index] += ALPHA * (reward + GAMMA * max_future_q - Q_table[state][action_index])
 
-# Store experience in memory buffer
-def store_in_memory(state, action, reward, next_state):
-    if len(memory) >= MEMORY_SIZE:
-        memory.pop(0)
-    memory.append((state, action, reward, next_state))
+    if is_terminal:
+        # Terminal state: no future reward
+        target = reward
+    else:
+        if next_state not in Q_table:
+            Q_table[next_state] = [random.uniform(-0.01, 0.01) for _ in ACTIONS]
+        max_future_q = max(Q_table[next_state])
+        target = reward + GAMMA * max_future_q
 
-# Sample a batch from memory and update Q-values
+    # Q-learning update
+    Q_table[state][action_index] += ALPHA * (target - Q_table[state][action_index])
+
+
+# Store experience in memory buffer - OPTIMIZED
+def store_in_memory(state, action, reward, next_state, is_terminal=False):
+    """Store experience in replay buffer (deque automatically handles max size)."""
+    memory.append((state, action, reward, next_state, is_terminal))
+
+
+# Sample a batch from memory and update Q-values - OPTIMIZED
 def replay():
+    """Sample random batch from memory and perform Q-learning updates."""
     if len(memory) < BATCH_SIZE:
         return
     batch = random.sample(memory, BATCH_SIZE)
-    for state, action, reward, next_state in batch:
-        update_q_value(state, action, reward, next_state)
+    for state, action, reward, next_state, is_terminal in batch:
+        update_q_value(state, action, reward, next_state, is_terminal)
 
-# Function to spawn food at random locations, ensuring it doesn't spawn on the snake's body (head or tail)
-def spawn_food(snake):
-    while True:
-        food = (random.randint(0, GRID_SIZE - 1), random.randint(0, GRID_SIZE - 1))
-        if food not in snake:  # Ensure food doesn't spawn on the snake's body
-            return food
-
-# Main game loop
+# Main game loop - FULLY OPTIMIZED
 def run_game():
+    """
+    Run a single game of snake with Q-learning.
+    Returns: (final_score, steps_taken)
+    """
+    global step_counter
+
     snake = initial_snake.copy()
     direction = random.choice(directions)
     food = spawn_food(snake)
     score = 0
+    steps = 0
+    steps_since_food = 0
+
+    # Track previous distance for reward shaping
+    prev_distance = manhattan_distance(snake[0], food)
+
     while True:
-        food_dx, food_dy = get_deltas(snake, food)
-        wall_and_tail = get_wall_and_tail_proximity(snake)
-        # Create state: (food_dx, food_dy, current direction index, wall/tail proximities)
-        state = (food_dx, food_dy, directions.index(direction)) + wall_and_tail
-        
+        # Get state using new relative encoding from utils
+        state = get_state(snake, food, direction)
+
         action = choose_action(state)
-        # Pass the food position into move_snake so that growth is handled here
-        game_continue, snake, direction = move_snake(snake, direction, action, food)
-        
-        # If game over, apply penalty based on whether it hit a wall or its tail
+
+        # Move snake
+        game_continue, new_snake, new_direction = move_snake(snake, direction, action, food)
+        steps += 1
+        steps_since_food += 1
+        step_counter += 1
+
+        # Check for termination conditions
         if not game_continue:
-            # If the head is in the rest of the body, it's a tail collision.
-            reward = PENALTY_TAIL if snake[0] in snake[1:] else PENALTY_WALL
-            update_q_value(state, action, reward, state)
-            return score + reward
+            # Game over - terminal state
+            reward = PENALTY_DEATH
+            store_in_memory(state, action, reward, state, is_terminal=True)
+            update_q_value(state, action, reward, state, is_terminal=True)
+            return score, steps
 
-        # Check if snake has eaten the food
-        if snake[0] == food:
+        # Check for infinite loop (snake not eating for too long)
+        if steps_since_food > MAX_STEPS_WITHOUT_FOOD:
+            # Terminate game to prevent endless wandering
+            reward = PENALTY_DEATH / 2  # Less harsh penalty
+            store_in_memory(state, action, reward, state, is_terminal=True)
+            update_q_value(state, action, reward, state, is_terminal=True)
+            return score, steps
+
+        # Calculate reward
+        if new_snake[0] == food:
+            # Snake ate food!
             reward = REWARD_FOOD
-            score += reward
-            food = spawn_food(snake)  # Spawn new food ensuring it does not appear on the snake
+            score += REWARD_FOOD
+            food = spawn_food(new_snake)
+            steps_since_food = 0  # Reset counter
+            prev_distance = manhattan_distance(new_snake[0], food)
         else:
-            reward = PENALTY_MOVE
+            # Normal move - apply distance-based reward shaping
+            new_distance = manhattan_distance(new_snake[0], food)
 
-        next_food_dx, next_food_dy = get_deltas(snake, food)
-        next_wall_and_tail = get_wall_and_tail_proximity(snake)
-        next_state = (next_food_dx, next_food_dy, directions.index(direction)) + next_wall_and_tail
+            if new_distance < prev_distance:
+                # Moving closer to food
+                reward = PENALTY_MOVE + REWARD_CLOSER
+            else:
+                # Moving away from food
+                reward = PENALTY_MOVE + PENALTY_FARTHER
 
-        update_q_value(state, action, reward, next_state)
-        store_in_memory(state, action, reward, next_state)
-        replay()
-        
-        # Optional termination condition (for very long games)
-        if len(snake) > 50:
-            break
-    return score
+            prev_distance = new_distance
+
+        # Update state
+        snake = new_snake
+        direction = new_direction
+        next_state = get_state(snake, food, direction)
+
+        # Store experience
+        store_in_memory(state, action, reward, next_state, is_terminal=False)
+
+        # Periodic replay for efficiency (only every REPLAY_FREQUENCY steps)
+        if step_counter % REPLAY_FREQUENCY == 0:
+            replay()
+
 
 # Function to compute moving average
 def moving_average(data, window_size):
+    """Calculate moving average for plotting."""
     return np.convolve(data, np.ones(window_size), 'valid') / window_size
 
-def run_multiple_games(num_games=NUM_GAMES):
-    global EPSILON  # Declare EPSILON as global before modifying it
-    total_score = 0
-    last_100_avg = 0  # Store last computed moving average
 
-    for i in range(1, num_games + 1):  # Start from 1 to avoid division by zero
-        game_score = run_game()
-        scores.append(game_score)  # Store individual game score
-        total_score += game_score  # Update cumulative score
-        cumulative_scores.append(total_score)  # Store cumulative score
+def run_multiple_games(num_games=NUM_GAMES):
+    """Run multiple games and track training progress."""
+    global EPSILON
+    total_score = 0
+    last_100_avg_score = 0
+    last_100_avg_steps = 0
+
+    for i in range(1, num_games + 1):
+        # Run game and get results
+        game_score, game_steps = run_game()
+
+        # Store metrics
+        scores.append(game_score)
+        steps_per_game.append(game_steps)
+        total_score += game_score
+        cumulative_scores.append(total_score)
         iterations.append(i)
         epsilons.append(EPSILON)
 
+        # Decay epsilon
         EPSILON = max(EPSILON_MIN, EPSILON * EPSILON_DECAY)
 
-        # Update last_100_avg every 100 iterations
+        # Update moving averages every 100 iterations
         if i % MOVING_AVERAGE_CHART_VAL == 0:
-            last_100_avg = np.mean(scores[-MOVING_AVERAGE_CHART_VAL:])
-        
-        # Print progress
-        sys.stdout.write(f"\rGame {i}/{num_games}: Total Score = {total_score}, "
-                         f"Last {MOVING_AVERAGE_CHART_VAL} Avg Score = {last_100_avg:.2f}, "
-                         f"Epsilon = {EPSILON:.4f}, Q-table size = {len(Q_table)}")
-        sys.stdout.flush()  # Ensure output is updated immediately
+            last_100_avg_score = np.mean(scores[-MOVING_AVERAGE_CHART_VAL:])
+            last_100_avg_steps = np.mean(steps_per_game[-MOVING_AVERAGE_CHART_VAL:])
 
-    print(f"\nTotal Score after {num_games} games: {total_score}")
-    EPSILON = max(EPSILON_MIN, EPSILON * EPSILON_DECAY)
+        # Print progress
+        sys.stdout.write(
+            f"\rGame {i}/{num_games} | "
+            f"Score: {game_score:.1f} | "
+            f"Avg-{MOVING_AVERAGE_CHART_VAL}: {last_100_avg_score:.2f} | "
+            f"Steps: {game_steps} | "
+            f"Epsilon: {EPSILON:.4f} | "
+            f"Q-table: {len(Q_table)} states"
+        )
+        sys.stdout.flush()
+
+    print(f"\n\nTraining completed!")
+    print(f"Total Score: {total_score:.2f}")
+    print(f"Average Score: {total_score/num_games:.2f}")
+    print(f"Final Q-table size: {len(Q_table)} states")
 
 # Run the simulation
 run_multiple_games(NUM_GAMES)
 
 # Save the trained Q-table using pickle
+print("\nSaving trained Q-table...")
 with open('trained_q_table.pkl', 'wb') as f:
     pickle.dump(Q_table, f)
+print("Q-table saved to 'trained_q_table.pkl'")
 
-# Calculate the moving average for plotting
-moving_avg = moving_average(scores, MOVING_AVERAGE_CHART_VAL)
-# Align iterations with the moving average
-valid_iterations = iterations[len(iterations) - len(moving_avg):]
+# Calculate the moving averages for plotting
+moving_avg_scores = moving_average(scores, MOVING_AVERAGE_CHART_VAL)
+moving_avg_steps = moving_average(steps_per_game, MOVING_AVERAGE_CHART_VAL)
 
-# Plot the graphs for epsilon, individual game scores, and cumulative score
-fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 10))
+# Align iterations with the moving averages
+valid_iterations = iterations[len(iterations) - len(moving_avg_scores):]
+
+# Plot the graphs - ENHANCED
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
 
 # Plot epsilon vs iterations
-ax1.plot(iterations, epsilons, color='blue')
-ax1.set_xlabel('Iterations')
-ax1.set_ylabel('Epsilon')
-ax1.set_title('Epsilon vs Iterations')
+ax1.plot(iterations, epsilons, color='blue', linewidth=1.5)
+ax1.set_xlabel('Game Number')
+ax1.set_ylabel('Epsilon (Exploration Rate)')
+ax1.set_title('Epsilon Decay Over Training')
+ax1.grid(True, alpha=0.3)
 
 # Plot individual game scores vs iterations
-ax2.plot(iterations, scores, color='green', alpha=0.3, label='Individual Scores')
-ax2.plot(valid_iterations, moving_avg, color='green', linestyle=':', linewidth=2, 
-         label=f'{MOVING_AVERAGE_CHART_VAL} Game Moving Avg')
-ax2.set_xlabel('Iterations')
+ax2.plot(iterations, scores, color='green', alpha=0.2, label='Individual Scores')
+ax2.plot(valid_iterations, moving_avg_scores, color='darkgreen', linewidth=2,
+         label=f'{MOVING_AVERAGE_CHART_VAL}-Game Moving Avg')
+ax2.set_xlabel('Game Number')
 ax2.set_ylabel('Score')
 ax2.set_title('Score per Game')
 ax2.legend()
+ax2.grid(True, alpha=0.3)
 
 # Plot cumulative score vs iterations
-ax3.plot(iterations, cumulative_scores, color='red')
-ax3.set_xlabel('Iterations')
+ax3.plot(iterations, cumulative_scores, color='red', linewidth=1.5)
+ax3.set_xlabel('Game Number')
 ax3.set_ylabel('Cumulative Score')
-ax3.set_title('Cumulative Score vs Iterations')
+ax3.set_title('Cumulative Score Over Training')
+ax3.grid(True, alpha=0.3)
+
+# Plot steps per game (NEW)
+ax4.plot(iterations, steps_per_game, color='purple', alpha=0.2, label='Steps per Game')
+ax4.plot(valid_iterations, moving_avg_steps, color='darkviolet', linewidth=2,
+         label=f'{MOVING_AVERAGE_CHART_VAL}-Game Moving Avg')
+ax4.set_xlabel('Game Number')
+ax4.set_ylabel('Steps')
+ax4.set_title('Steps Survived per Game')
+ax4.legend()
+ax4.grid(True, alpha=0.3)
 
 plt.tight_layout()
+print("\nDisplaying training visualization...")
 plt.show()
