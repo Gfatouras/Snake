@@ -62,9 +62,12 @@ def get_danger_proximity(snake, direction):
 def get_relative_food_direction(snake, food, direction):
     """
     Get food direction relative to snake's current heading.
-    Returns: (food_ahead, food_left, food_right) where each is in {-1, 0, 1}
+    Returns: (food_vertical, food_horizontal) where each is in {-1, 0, 1}
 
-    This makes the state representation direction-invariant.
+    - food_vertical: -1 = behind, 0 = aligned, 1 = ahead
+    - food_horizontal: -1 = left, 0 = aligned, 1 = right
+
+    This creates a cleaner 2D relative representation that's direction-invariant.
     """
     head = snake[0]
     current_dir_idx = directions.index(direction)
@@ -73,30 +76,28 @@ def get_relative_food_direction(snake, food, direction):
     food_dx = np.sign(food[0] - head[0])
     food_dy = np.sign(food[1] - head[1])
 
-    # Map food direction to relative direction
-    # Straight = along current direction
-    # Left/Right = perpendicular to current direction
-
-    straight_dir = directions[current_dir_idx]
-    left_dir = directions[(current_dir_idx - 1) % 4]
+    # Get the forward and right vectors for current direction
+    forward_dir = directions[current_dir_idx]
     right_dir = directions[(current_dir_idx + 1) % 4]
 
-    # Project food vector onto each relative direction
-    food_straight = food_dx * straight_dir[0] + food_dy * straight_dir[1]
-    food_left = food_dx * left_dir[0] + food_dy * left_dir[1]
-    food_right = food_dx * right_dir[0] + food_dy * right_dir[1]
+    # Project food vector onto forward (vertical) and right (horizontal) axes
+    food_vertical = food_dx * forward_dir[0] + food_dy * forward_dir[1]
+    food_horizontal = food_dx * right_dir[0] + food_dy * right_dir[1]
 
-    return (np.sign(food_straight), np.sign(food_left), np.sign(food_right))
+    return (int(np.sign(food_vertical)), int(np.sign(food_horizontal)))
 
 
 def get_state(snake, food, direction):
     """
     Generate state representation using relative encoding.
-    This reduces state space by 4x compared to absolute direction encoding.
+    State space: 3^2 (food) × 2^3 (danger) = 9 × 8 = 72 possible states
+
+    This is direction-invariant (4x smaller than absolute encoding) and
+    uses a clean 2D relative coordinate system.
     """
     food_rel = get_relative_food_direction(snake, food, direction)
     danger = get_danger_proximity(snake, direction)
-    # State: (food_straight, food_left, food_right, danger_straight, danger_left, danger_right)
+    # State: (food_vertical, food_horizontal, danger_straight, danger_left, danger_right)
     return food_rel + danger
 
 

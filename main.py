@@ -10,8 +10,8 @@ from utils import (
 )
 
 # Hyperparameters - OPTIMIZED
-ALPHA = 0.05     # Learning rate (reduced for more stable convergence)
-GAMMA = 0.95     # Discount factor (increased to value long-term rewards)
+ALPHA = 0.025     # Learning rate (reduced for more stable convergence)
+GAMMA = 0.97     # Discount factor (increased to value long-term rewards)
 EPSILON = 1.0    # Initial exploration rate
 EPSILON_DECAY = 0.999   # Decay rate (faster decay - reaches min around game 1000)
 EPSILON_MIN = 0.001      # Minimum exploration rate (keep small exploration)
@@ -19,7 +19,7 @@ EPSILON_MIN = 0.001      # Minimum exploration rate (keep small exploration)
 MEMORY_SIZE = 2048      # Memory buffer size (increased for better sampling)
 BATCH_SIZE = 64         # Batch size for training (reduced for faster early training)
 REPLAY_FREQUENCY = 4    # Only replay every N steps (optimization)
-NUM_GAMES = 10_000       # Number of iterations
+NUM_GAMES = 8_000       # Number of iterations
 
 MOVING_AVERAGE_CHART_VAL = 100  # Last 100 games average
 

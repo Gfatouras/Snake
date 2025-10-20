@@ -13,7 +13,7 @@ from utils import (
 )
 
 # Display settings
-CELL_SIZE = 20  # Increased for better visibility
+CELL_SIZE = 17  # Increased for better visibility
 WIDTH, HEIGHT = GRID_SIZE * CELL_SIZE, GRID_SIZE * CELL_SIZE
 FPS = 10  # Game speed
 
